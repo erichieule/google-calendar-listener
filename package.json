@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "dev": "cross-env NODE_ENV=development nodemon src/index.js",
-    "start": "pm2 start ecosystem.config.json --no-daemon"
+    "start": "pm2 start ecosystem.config.json"
   },
   "dependencies": {
     "@google-cloud/local-auth": "^3.0.1",

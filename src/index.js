@@ -6,7 +6,6 @@ import path from 'path';
 import fs from 'fs/promises';
 import {v4} from 'uuid';
 import localtunnel from 'localtunnel';
-import EventEmitter from 'events';
 
 const app = express();
 const port = 4040;
@@ -15,6 +14,7 @@ dotenv.config();
 app.use(express.json());
 app.use(cors());
 app.options('*', cors());
+const sockets = [];
 
 // If modifying these scopes, delete token.json.
 const SCOPES = ['https://www.googleapis.com/auth/calendar.readonly'];
@@ -22,9 +22,7 @@ const SCOPES = ['https://www.googleapis.com/auth/calendar.readonly'];
 // created automatically when the authorization flow completes for the first
 // time.
 const TOKEN_PATH = path.join(process.cwd(), 'token.json');
-const CALENDAR_ID = 'c_188398mh0rpsgir0lo9pqpvl9hciq@resource.calendar.google.com';
-
-const eventEmitter = new EventEmitter();
+const CALENDAR_ID = 'primary' ?? 'c_188398mh0rpsgir0lo9pqpvl9hciq@resource.calendar.google.com';
 
 /**
  * Reads previously authorized credentials from the save file.
@@ -55,8 +53,9 @@ app.post('/gg-cal-webhook', async (req, res) => {
   const channelId = req.headers['x-goog-channel-id'];
   const resourceState = req.headers['x-goog-resource-state'];
 
-  // Use the channel token to validate the webhook
-  eventEmitter.emit('update');
+  sockets.forEach((socket) => {
+    socket.res.write('update\n');
+  });
 
   if (resourceState === 'sync') {
     return res.status(200).send();
@@ -99,13 +98,14 @@ app.get('/events/watch', (req, res) => {
 
   res.write("data: Connection Established, We'll now start receiving messages from the server.\n");
   console.log('New connection established');
-  eventEmitter.once('update', () => {
-    res.write('update');
-  });
-  console.log(eventEmitter.listenerCount('update'));
+  const id = v4();
+  sockets.push({id, res});
 
   // Close the connection when the client disconnects
-  req.on('close', () => res.end('OK'));
+  req.on('close', () => {
+    sockets.filter((socket) => socket.id !== id);
+    res.end('OK');
+  });
 });
 
 app.get('/', (req, res) => {
