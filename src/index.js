@@ -3,8 +3,9 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import {google} from 'googleapis';
 import path from 'path';
-import {authenticate} from '@google-cloud/local-auth';
 import fs from 'fs/promises';
+import {v4} from 'uuid';
+import localtunnel from 'localtunnel';
 
 const app = express();
 const port = 4040;
@@ -20,6 +21,7 @@ const SCOPES = ['https://www.googleapis.com/auth/calendar.readonly'];
 // created automatically when the authorization flow completes for the first
 // time.
 const TOKEN_PATH = path.join(process.cwd(), 'token.json');
+const CALENDAR_ID = 'c_188398mh0rpsgir0lo9pqpvl9hciq@resource.calendar.google.com';
 
 /**
  * Reads previously authorized credentials from the save file.
@@ -44,37 +46,81 @@ async function authorize() {
   return await loadSavedCredentialsIfExist();
 }
 
-/**
- * Lists the next 10 events on the user's primary calendar.
- * @param {google.auth.OAuth2} auth An authorized OAuth2 client.
- */
-async function listEvents(auth) {
-  const calendar = google.calendar({version: 'v3', auth});
-  const res = await calendar.events.list({
-    calendarId: 'primary',
+app.post('/gg-cal-webhook', async (req, res) => {
+  const resourceId = req.headers['x-goog-resource-id'];
+  const channelToken = req.headers['x-goog-channel-token'];
+  const channelId = req.headers['x-goog-channel-id'];
+  const resourceState = req.headers['x-goog-resource-state'];
+
+  // Use the channel token to validate the webhook
+
+  if (resourceState === 'sync') {
+    return res.status(200).send();
+  }
+
+  // Authorization details for google API are explained in previous steps.
+  const calendar = google.calendar({version: 'v3'});
+  // Get the events that changed during the webhook timestamp by using timeMin property.
+  const event = await calendar.events.list({
+    calendarId: CALENDAR_ID,
     timeMin: new Date().toISOString(),
-    maxResults: 10,
     singleEvents: true,
     orderBy: 'startTime',
   });
-  const events = res.data.items;
-  if (!events || events.length === 0) {
-    console.log('No upcoming events found.');
-    return;
-  }
-  console.log('Upcoming 10 events:');
-  events.map((event, i) => {
-    const start = event.start.dateTime || event.start.date;
-    console.log(`${start} - ${event.summary}`);
-  });
-}
+  // log in the console the total events that changed since the webhook was called.
+  console.info(event.data.items);
 
-authorize().then(listEvents).catch(console.error);
+  return res.status(200).send('Webhook received');
+});
+
+app.get('/upcoming-events', async (req, res) => {
+  const calendar = google.calendar({version: 'v3'});
+  const response = await calendar.events.list({
+    calendarId: CALENDAR_ID,
+    timeMin: new Date().toISOString(),
+    singleEvents: true,
+    orderBy: 'startTime',
+  });
+  const events = response.data.items;
+  res.json(events);
+});
 
 app.get('/', (req, res) => {
   res.send('Hello World!');
 });
 
-app.listen(port, () => {
+const initWatchEvents = async (address) => {
+  const calendar = google.calendar({version: 'v3'});
+  const response = await calendar.events.watch({
+    calendarId: CALENDAR_ID,
+    requestBody: {
+      id: v4(),
+      type: 'web_hook',
+      address,
+    },
+  });
+  console.log(response.data);
+};
+
+app.listen(port, async () => {
+  const auth = await authorize();
+  if (auth) {
+    google.options({auth});
+  }
+
+  const tunnel = await localtunnel({
+    port,
+  });
+  const calendar = google.calendar({version: 'v3'});
+  const response = await calendar.events.watch({
+    calendarId: CALENDAR_ID,
+    requestBody: {
+      id: v4(),
+      type: 'web_hook',
+      address: tunnel.url + '/gg-cal-webhook',
+    },
+  });
+  console.log(response.data);
+
   console.log(`Listening on port ${port}...`);
 });
