@@ -6,6 +6,7 @@ import path from 'path';
 import fs from 'fs/promises';
 import {v4} from 'uuid';
 import localtunnel from 'localtunnel';
+import EventEmitter from 'events';
 
 const app = express();
 const port = 4040;
@@ -23,6 +24,8 @@ const SCOPES = ['https://www.googleapis.com/auth/calendar.readonly'];
 const TOKEN_PATH = path.join(process.cwd(), 'token.json');
 const CALENDAR_ID = 'c_188398mh0rpsgir0lo9pqpvl9hciq@resource.calendar.google.com';
 
+const eventEmitter = new EventEmitter();
+
 /**
  * Reads previously authorized credentials from the save file.
  *
@@ -30,8 +33,8 @@ const CALENDAR_ID = 'c_188398mh0rpsgir0lo9pqpvl9hciq@resource.calendar.google.co
  */
 async function loadSavedCredentialsIfExist() {
   try {
-    const content = await fs.readFile(TOKEN_PATH);
-    const credentials = JSON.parse(content);
+    // const content = await fs.readFile(TOKEN_PATH);
+    const credentials = JSON.parse(process.env.TOKEN);
     return google.auth.fromJSON(credentials);
   } catch (err) {
     return null;
@@ -53,6 +56,7 @@ app.post('/gg-cal-webhook', async (req, res) => {
   const resourceState = req.headers['x-goog-resource-state'];
 
   // Use the channel token to validate the webhook
+  eventEmitter.emit('update');
 
   if (resourceState === 'sync') {
     return res.status(200).send();
@@ -78,6 +82,7 @@ app.get('/upcoming-events', async (req, res) => {
   const response = await calendar.events.list({
     calendarId: CALENDAR_ID,
     timeMin: new Date().toISOString(),
+    timeMax: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
     singleEvents: true,
     orderBy: 'startTime',
   });
@@ -85,22 +90,27 @@ app.get('/upcoming-events', async (req, res) => {
   res.json(events);
 });
 
+app.get('/events/watch', (req, res) => {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    Connection: 'keep-alive',
+    'Cache-Control': 'no-cache',
+  });
+
+  res.write("data: Connection Established, We'll now start receiving messages from the server.\n");
+  console.log('New connection established');
+  eventEmitter.once('update', () => {
+    res.write('update');
+  });
+  console.log(eventEmitter.listenerCount('update'));
+
+  // Close the connection when the client disconnects
+  req.on('close', () => res.end('OK'));
+});
+
 app.get('/', (req, res) => {
   res.send('Hello World!');
 });
-
-const initWatchEvents = async (address) => {
-  const calendar = google.calendar({version: 'v3'});
-  const response = await calendar.events.watch({
-    calendarId: CALENDAR_ID,
-    requestBody: {
-      id: v4(),
-      type: 'web_hook',
-      address,
-    },
-  });
-  console.log(response.data);
-};
 
 app.listen(port, async () => {
   const auth = await authorize();
